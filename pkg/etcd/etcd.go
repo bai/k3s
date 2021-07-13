@@ -71,7 +71,7 @@ type ETCD struct {
 	runtime *config.ControlRuntime
 	address string
 	cron    *cron.Cron
-	s3      *s3
+	s3      *S3
 }
 
 type learnerProgress struct {
@@ -210,7 +210,7 @@ func (e *ETCD) Reset(ctx context.Context, rebootstrap func() error) error {
 				return err
 			}
 			logrus.Infof("Retrieving etcd snapshot %s from S3", e.config.ClusterResetRestorePath)
-			if err := e.s3.download(ctx); err != nil {
+			if err := e.s3.Download(ctx); err != nil {
 				return err
 			}
 			logrus.Infof("S3 download complete for %s", e.config.ClusterResetRestorePath)
@@ -960,7 +960,7 @@ func (e *ETCD) listSnapshots(ctx context.Context, snapshotDir string) ([]Snapsho
 // if it hasn't yet been initialized.
 func (e *ETCD) initS3IfNil(ctx context.Context) error {
 	if e.s3 == nil {
-		s3, err := newS3(ctx, e.config)
+		s3, err := NewS3(ctx, e.config)
 		if err != nil {
 			return err
 		}
@@ -968,6 +968,25 @@ func (e *ETCD) initS3IfNil(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// PruneSnapshots perfrorms a retention run with the given
+// retention duration and removes expired snapshots.
+func (e *ETCD) PruneSnapshots(ctx context.Context) error {
+	snapshotDir, err := snapshotDir(e.config)
+	if err != nil {
+		return errors.Wrap(err, "failed to get the snapshot dir")
+	}
+
+	if e.config.EtcdS3 {
+		if e.initS3IfNil(ctx); err != nil {
+			return err
+		}
+
+		return e.s3.snapshotRetention(ctx)
+	}
+
+	return snapshotRetention(e.config.EtcdSnapshotRetention, snapshotDir)
 }
 
 // ListSnapshots is an exported wrapper method that wraps an
@@ -998,12 +1017,13 @@ func (e *ETCD) DeleteSnapshots(ctx context.Context, snapshots []string) error {
 		}
 
 		objectsCh := make(chan minio.ObjectInfo)
-		defer close(objectsCh)
 
 		ctx, cancel := context.WithTimeout(ctx, defaultS3OpTimeout)
 		defer cancel()
 
 		go func() {
+			defer close(objectsCh)
+
 			opts := minio.ListObjectsOptions{
 				Recursive: true,
 			}

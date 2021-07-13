@@ -19,12 +19,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/snapshots/overlay"
-	fuseoverlayfs "github.com/containerd/fuse-overlayfs-snapshotter"
 	"github.com/pkg/errors"
 	"github.com/rancher/k3s/pkg/agent/proxy"
 	"github.com/rancher/k3s/pkg/cli/cmds"
 	"github.com/rancher/k3s/pkg/clientaccess"
+	"github.com/rancher/k3s/pkg/containerd"
 	"github.com/rancher/k3s/pkg/daemons/config"
 	"github.com/rancher/k3s/pkg/daemons/control/deps"
 	"github.com/rancher/k3s/pkg/util"
@@ -447,12 +446,12 @@ func get(ctx context.Context, envInfo *cmds.Agent, proxy proxy.Proxy) (*config.N
 	if !nodeConfig.Docker && nodeConfig.ContainerRuntimeEndpoint == "" {
 		switch nodeConfig.AgentConfig.Snapshotter {
 		case "overlayfs":
-			if err := overlay.Supported(nodeConfig.Containerd.Root); err != nil {
+			if err := containerd.OverlaySupported(nodeConfig.Containerd.Root); err != nil {
 				return nil, errors.Wrapf(err, "\"overlayfs\" snapshotter cannot be enabled for %q, try using \"fuse-overlayfs\" or \"native\"",
 					nodeConfig.Containerd.Root)
 			}
 		case "fuse-overlayfs":
-			if err := fuseoverlayfs.Supported(nodeConfig.Containerd.Root); err != nil {
+			if err := containerd.FuseoverlayfsSupported(nodeConfig.Containerd.Root); err != nil {
 				return nil, errors.Wrapf(err, "\"fuse-overlayfs\" snapshotter cannot be enabled for %q, try using \"native\"",
 					nodeConfig.Containerd.Root)
 			}
@@ -462,8 +461,7 @@ func get(ctx context.Context, envInfo *cmds.Agent, proxy proxy.Proxy) (*config.N
 	if !envInfo.Debug {
 		nodeConfig.Containerd.Log = filepath.Join(envInfo.DataDir, "agent", "containerd", "containerd.log")
 	}
-	nodeConfig.Containerd.State = "/run/k3s/containerd"
-	nodeConfig.Containerd.Address = filepath.Join(nodeConfig.Containerd.State, "containerd.sock")
+	applyContainerdStateAndAddress(nodeConfig)
 	nodeConfig.Containerd.Template = filepath.Join(envInfo.DataDir, "agent", "etc", "containerd", "config.toml.tmpl")
 	nodeConfig.Certificate = servingCert
 
@@ -552,10 +550,11 @@ func get(ctx context.Context, envInfo *cmds.Agent, proxy proxy.Proxy) (*config.N
 
 	nodeConfig.AgentConfig.PauseImage = envInfo.PauseImage
 	nodeConfig.AgentConfig.AirgapExtraRegistry = envInfo.AirgapExtraRegistry
+	nodeConfig.AgentConfig.SystemDefaultRegistry = controlConfig.SystemDefaultRegistry
 
 	// Apply SystemDefaultRegistry to PauseImage and AirgapExtraRegistry
 	if controlConfig.SystemDefaultRegistry != "" {
-		if !strings.HasPrefix(nodeConfig.AgentConfig.PauseImage, controlConfig.SystemDefaultRegistry) {
+		if nodeConfig.AgentConfig.PauseImage != "" && !strings.HasPrefix(nodeConfig.AgentConfig.PauseImage, controlConfig.SystemDefaultRegistry) {
 			nodeConfig.AgentConfig.PauseImage = controlConfig.SystemDefaultRegistry + "/" + nodeConfig.AgentConfig.PauseImage
 		}
 		if !slice.ContainsString(nodeConfig.AgentConfig.AirgapExtraRegistry, controlConfig.SystemDefaultRegistry) {

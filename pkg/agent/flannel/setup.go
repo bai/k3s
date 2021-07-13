@@ -61,8 +61,8 @@ const (
 
 	wireguardBackend = `{
 	"Type": "extension",
-	"PreStartupCommand": "wg genkey | tee privatekey | wg pubkey",
-	"PostStartupCommand": "export SUBNET_IP=$(echo $SUBNET | cut -d'/' -f 1); ip link del flannel.1 2>/dev/null; echo $PATH >&2; wg-add.sh flannel.1 && wg set flannel.1 listen-port 51820 private-key privatekey && ip addr add $SUBNET_IP/32 dev flannel.1 && ip link set flannel.1 up && ip route add $NETWORK dev flannel.1",
+	"PreStartupCommand": "wg genkey | tee %flannelConfDir%/privatekey | wg pubkey",
+	"PostStartupCommand": "export SUBNET_IP=$(echo $SUBNET | cut -d'/' -f 1); ip link del flannel.1 2>/dev/null; echo $PATH >&2; wg-add.sh flannel.1 && wg set flannel.1 listen-port 51820 private-key %flannelConfDir%/privatekey && ip addr add $SUBNET_IP/32 dev flannel.1 && ip link set flannel.1 up && ip route add $NETWORK dev flannel.1",
 	"ShutdownCommand": "ip link del flannel.1",
 	"SubnetAddCommand": "read PUBLICKEY; wg set flannel.1 peer $PUBLICKEY endpoint $PUBLIC_IP:51820 allowed-ips $SUBNET persistent-keepalive 25",
 	"SubnetRemoveCommand": "read PUBLICKEY; wg set flannel.1 peer $PUBLICKEY remove"
@@ -118,7 +118,7 @@ func createFlannelConf(nodeConfig *config.Node) error {
 		logrus.Infof("Using custom flannel conf defined at %s", nodeConfig.FlannelConf)
 		return nil
 	}
-	confJSON := strings.Replace(flannelConf, "%CIDR%", nodeConfig.AgentConfig.ClusterCIDR.String(), -1)
+	confJSON := strings.ReplaceAll(flannelConf, "%CIDR%", nodeConfig.AgentConfig.ClusterCIDR.String())
 
 	var backendConf string
 
@@ -128,16 +128,16 @@ func createFlannelConf(nodeConfig *config.Node) error {
 	case config.FlannelBackendHostGW:
 		backendConf = hostGWBackend
 	case config.FlannelBackendIPSEC:
-		backendConf = strings.Replace(ipsecBackend, "%psk%", nodeConfig.AgentConfig.IPSECPSK, -1)
+		backendConf = strings.ReplaceAll(ipsecBackend, "%psk%", nodeConfig.AgentConfig.IPSECPSK)
 		if err := setupStrongSwan(nodeConfig); err != nil {
 			return err
 		}
 	case config.FlannelBackendWireguard:
-		backendConf = wireguardBackend
+		backendConf = strings.ReplaceAll(wireguardBackend, "%flannelConfDir%", filepath.Dir(nodeConfig.FlannelConf))
 	default:
 		return fmt.Errorf("Cannot configure unknown flannel backend '%s'", nodeConfig.FlannelBackend)
 	}
-	confJSON = strings.Replace(confJSON, "%backend%", backendConf, -1)
+	confJSON = strings.ReplaceAll(confJSON, "%backend%", backendConf)
 
 	return util.WriteFile(nodeConfig.FlannelConf, confJSON)
 }

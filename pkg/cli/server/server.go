@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rancher/k3s/pkg/agent"
 	"github.com/rancher/k3s/pkg/cli/cmds"
+	"github.com/rancher/k3s/pkg/clientaccess"
 	"github.com/rancher/k3s/pkg/datadir"
 	"github.com/rancher/k3s/pkg/etcd"
 	"github.com/rancher/k3s/pkg/netutil"
@@ -118,6 +119,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	serverConfig.ControlConfig.ExtraCloudControllerArgs = cfg.ExtraCloudControllerArgs
 	serverConfig.ControlConfig.DisableCCM = cfg.DisableCCM
 	serverConfig.ControlConfig.DisableNPC = cfg.DisableNPC
+	serverConfig.ControlConfig.DisableHelmController = cfg.DisableHelmController
 	serverConfig.ControlConfig.DisableKubeProxy = cfg.DisableKubeProxy
 	serverConfig.ControlConfig.DisableETCD = cfg.DisableETCD
 	serverConfig.ControlConfig.DisableAPIServer = cfg.DisableAPIServer
@@ -125,21 +127,26 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	serverConfig.ControlConfig.DisableControllerManager = cfg.DisableControllerManager
 	serverConfig.ControlConfig.ClusterInit = cfg.ClusterInit
 	serverConfig.ControlConfig.EncryptSecrets = cfg.EncryptSecrets
-	serverConfig.ControlConfig.EtcdSnapshotName = cfg.EtcdSnapshotName
-	serverConfig.ControlConfig.EtcdSnapshotCron = cfg.EtcdSnapshotCron
-	serverConfig.ControlConfig.EtcdSnapshotDir = cfg.EtcdSnapshotDir
-	serverConfig.ControlConfig.EtcdSnapshotRetention = cfg.EtcdSnapshotRetention
-	serverConfig.ControlConfig.EtcdDisableSnapshots = cfg.EtcdDisableSnapshots
 	serverConfig.ControlConfig.EtcdExposeMetrics = cfg.EtcdExposeMetrics
-	serverConfig.ControlConfig.EtcdS3 = cfg.EtcdS3
-	serverConfig.ControlConfig.EtcdS3Endpoint = cfg.EtcdS3Endpoint
-	serverConfig.ControlConfig.EtcdS3EndpointCA = cfg.EtcdS3EndpointCA
-	serverConfig.ControlConfig.EtcdS3SkipSSLVerify = cfg.EtcdS3SkipSSLVerify
-	serverConfig.ControlConfig.EtcdS3AccessKey = cfg.EtcdS3AccessKey
-	serverConfig.ControlConfig.EtcdS3SecretKey = cfg.EtcdS3SecretKey
-	serverConfig.ControlConfig.EtcdS3BucketName = cfg.EtcdS3BucketName
-	serverConfig.ControlConfig.EtcdS3Region = cfg.EtcdS3Region
-	serverConfig.ControlConfig.EtcdS3Folder = cfg.EtcdS3Folder
+	serverConfig.ControlConfig.EtcdDisableSnapshots = cfg.EtcdDisableSnapshots
+
+	if !cfg.EtcdDisableSnapshots {
+		serverConfig.ControlConfig.EtcdSnapshotName = cfg.EtcdSnapshotName
+		serverConfig.ControlConfig.EtcdSnapshotCron = cfg.EtcdSnapshotCron
+		serverConfig.ControlConfig.EtcdSnapshotDir = cfg.EtcdSnapshotDir
+		serverConfig.ControlConfig.EtcdSnapshotRetention = cfg.EtcdSnapshotRetention
+		serverConfig.ControlConfig.EtcdS3 = cfg.EtcdS3
+		serverConfig.ControlConfig.EtcdS3Endpoint = cfg.EtcdS3Endpoint
+		serverConfig.ControlConfig.EtcdS3EndpointCA = cfg.EtcdS3EndpointCA
+		serverConfig.ControlConfig.EtcdS3SkipSSLVerify = cfg.EtcdS3SkipSSLVerify
+		serverConfig.ControlConfig.EtcdS3AccessKey = cfg.EtcdS3AccessKey
+		serverConfig.ControlConfig.EtcdS3SecretKey = cfg.EtcdS3SecretKey
+		serverConfig.ControlConfig.EtcdS3BucketName = cfg.EtcdS3BucketName
+		serverConfig.ControlConfig.EtcdS3Region = cfg.EtcdS3Region
+		serverConfig.ControlConfig.EtcdS3Folder = cfg.EtcdS3Folder
+	} else {
+		logrus.Info("ETCD snapshots are disabled")
+	}
 
 	if cfg.ClusterResetRestorePath != "" && !cfg.ClusterReset {
 		return errors.New("invalid flag use; --cluster-reset required with --cluster-reset-restore-path")
@@ -358,8 +365,6 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	}
 
 	logrus.Info("Starting " + version.Program + " " + app.App.Version)
-	notifySocket := os.Getenv("NOTIFY_SOCKET")
-	os.Unsetenv("NOTIFY_SOCKET")
 
 	ctx := signals.SetupSignalHandler(context.Background())
 
@@ -375,9 +380,9 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 			<-serverConfig.ControlConfig.Runtime.ETCDReady
 			logrus.Info("ETCD server is now running")
 		}
+
 		logrus.Info(version.Program + " is up and running")
-		if notifySocket != "" {
-			os.Setenv("NOTIFY_SOCKET", notifySocket)
+		if cfg.DisableAgent && os.Getenv("NOTIFY_SOCKET") != "" {
 			systemd.SdNotify(true, "READY=1\n")
 		}
 	}()
@@ -393,7 +398,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	}
 
 	url := fmt.Sprintf("https://%s:%d", ip, serverConfig.ControlConfig.SupervisorPort)
-	token, err := server.FormatToken(serverConfig.ControlConfig.Runtime.AgentToken, serverConfig.ControlConfig.Runtime.ServerCA)
+	token, err := clientaccess.FormatToken(serverConfig.ControlConfig.Runtime.AgentToken, serverConfig.ControlConfig.Runtime.ServerCA)
 	if err != nil {
 		return err
 	}

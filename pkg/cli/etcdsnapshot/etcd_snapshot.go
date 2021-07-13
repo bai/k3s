@@ -15,6 +15,7 @@ import (
 	"github.com/rancher/k3s/pkg/daemons/config"
 	"github.com/rancher/k3s/pkg/etcd"
 	"github.com/rancher/k3s/pkg/server"
+	util2 "github.com/rancher/k3s/pkg/util"
 	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/urfave/cli"
 )
@@ -69,7 +70,7 @@ func run(app *cli.Context, cfg *cmds.Server) error {
 	}
 
 	if len(app.Args()) > 0 {
-		return cmds.ErrCommandNoArgs
+		return util2.ErrCommandNoArgs
 	}
 
 	serverConfig.ControlConfig.DataDir = dataDir
@@ -88,7 +89,7 @@ func run(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 	if !initialized {
-		return errors.New("managed etcd database has not been initialized")
+		return fmt.Errorf("etcd database not found in %s", dataDir)
 	}
 
 	cluster := cluster.New(&serverConfig.ControlConfig)
@@ -180,4 +181,29 @@ func list(app *cli.Context, cfg *cmds.Server) error {
 	}
 
 	return nil
+}
+
+func Prune(app *cli.Context) error {
+	if err := cmds.InitLogging(); err != nil {
+		return err
+	}
+	return prune(app, &cmds.ServerConfig)
+}
+
+func prune(app *cli.Context, cfg *cmds.Server) error {
+	var serverConfig server.Config
+
+	dataDir, err := commandSetup(app, cfg, &serverConfig)
+	if err != nil {
+		return err
+	}
+
+	serverConfig.ControlConfig.DataDir = dataDir
+	serverConfig.ControlConfig.EtcdSnapshotRetention = cfg.EtcdSnapshotRetention
+
+	ctx := signals.SetupSignalHandler(context.Background())
+	e := etcd.NewETCD()
+	e.SetControlConfig(&serverConfig.ControlConfig)
+
+	return e.PruneSnapshots(ctx)
 }

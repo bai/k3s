@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	net2 "net"
@@ -188,13 +186,17 @@ func coreControllers(ctx context.Context, sc *Context, config *Config) error {
 		servicelb.DefaultLBImage = config.ControlConfig.SystemDefaultRegistry + "/" + servicelb.DefaultLBImage
 	}
 
-	helm.Register(ctx, sc.Apply,
-		sc.Helm.Helm().V1().HelmChart(),
-		sc.Helm.Helm().V1().HelmChartConfig(),
-		sc.Batch.Batch().V1().Job(),
-		sc.Auth.Rbac().V1().ClusterRoleBinding(),
-		sc.Core.Core().V1().ServiceAccount(),
-		sc.Core.Core().V1().ConfigMap())
+	if !config.ControlConfig.DisableHelmController {
+		helm.Register(ctx,
+			sc.Apply,
+			sc.Helm.Helm().V1().HelmChart(),
+			sc.Helm.Helm().V1().HelmChartConfig(),
+			sc.Batch.Batch().V1().Job(),
+			sc.Auth.Rbac().V1().ClusterRoleBinding(),
+			sc.Core.Core().V1().ServiceAccount(),
+			sc.Core.Core().V1().ConfigMap())
+	}
+
 	if err := servicelb.Register(ctx,
 		sc.K8s,
 		sc.Apply,
@@ -204,7 +206,8 @@ func coreControllers(ctx context.Context, sc *Context, config *Config) error {
 		sc.Core.Core().V1().Pod(),
 		sc.Core.Core().V1().Service(),
 		sc.Core.Core().V1().Endpoints(),
-		!config.DisableServiceLB, config.Rootless); err != nil {
+		!config.DisableServiceLB,
+		config.Rootless); err != nil {
 		return err
 	}
 
@@ -213,7 +216,10 @@ func coreControllers(ctx context.Context, sc *Context, config *Config) error {
 	}
 
 	if config.Rootless {
-		return rootlessports.Register(ctx, sc.Core.Core().V1().Service(), !config.DisableServiceLB, config.ControlConfig.HTTPSPort)
+		return rootlessports.Register(ctx,
+			sc.Core.Core().V1().Service(),
+			!config.DisableServiceLB,
+			config.ControlConfig.HTTPSPort)
 	}
 
 	return nil
@@ -242,7 +248,12 @@ func stageFiles(ctx context.Context, sc *Context, controlConfig *config.Control)
 		return err
 	}
 
-	return deploy.WatchFiles(ctx, sc.Apply, sc.K3s.K3s().V1().Addon(), controlConfig.Disables, dataDir)
+	return deploy.WatchFiles(ctx,
+		sc.K8s,
+		sc.Apply,
+		sc.K3s.K3s().V1().Addon(),
+		controlConfig.Disables,
+		dataDir)
 }
 
 // registryTemplate behaves like the system_default_registry template in Rancher helm charts,
@@ -413,30 +424,12 @@ func printToken(httpsPort int, advertiseIP, prefix, cmd string) {
 	logrus.Infof("%s %s %s -s https://%s:%d -t ${NODE_TOKEN}", prefix, version.Program, cmd, ip, httpsPort)
 }
 
-func FormatToken(token string, certFile string) (string, error) {
-	if len(token) == 0 {
-		return token, nil
-	}
-
-	prefix := "K10"
-	if len(certFile) > 0 {
-		bytes, err := ioutil.ReadFile(certFile)
-		if err != nil {
-			return "", nil
-		}
-		digest := sha256.Sum256(bytes)
-		prefix = "K10" + hex.EncodeToString(digest[:]) + "::"
-	}
-
-	return prefix + token, nil
-}
-
 func writeToken(token, file, certs string) error {
 	if len(token) == 0 {
 		return nil
 	}
 
-	token, err := FormatToken(token, certs)
+	token, err := clientaccess.FormatToken(token, certs)
 	if err != nil {
 		return err
 	}
